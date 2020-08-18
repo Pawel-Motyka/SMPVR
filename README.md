@@ -13,8 +13,7 @@ Corresponding author: Paweł Motyka, e-mail: pawel.motyka{at}psych.uw.edu.pl
 #### Abstract:
 
 
-#### Keywords: 
-Action/perception, locomotion, optic flow, perceptual awareness, binocular rivalry
+#### Keywords: Action/perception, locomotion, optic flow, perceptual awareness, binocular rivalry
 
 
 
