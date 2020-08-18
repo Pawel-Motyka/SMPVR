@@ -1,0 +1,188 @@
+---
+title: <font size="5">**SMPVR -- Proprioception Assessment**</font> 
+author: <br> <font size="4"> Pawe³ Motyka (University of Warsaw) </font> <br>  *pawel.motyka@psych.uw.edu.pl* 
+date: <font size="3"> October 2019  </font>
+output: html_document
+chunk_output_type: console
+
+--- 
+&nbsp;
+
+<font size="4">
+**List of sections**:
+
+1. Load the required packages and data [S1](#S1)
+2. Calculate the main variables [S2](#S2)
+3. Test the correlation between prioprioceptive accuracy and proprioceptive precision [S3](#S3)
+4. Test the correlation between performance in abductions and flexions  [S4](#S4)
+
+--- 
+
+<a name="S1"></a>
+&nbsp;
+
+#####**1. Load required packages and data**  
+
+```{r, message=FALSE, warning= FALSE}
+
+# Load required packages 
+library(xlsx, quietly = T)
+library(ggplot2, quietly = T)
+library(dplyr, quietly = T)
+library(here, quietly = T)
+
+#data directory & data reading
+data_dir <- paste0(here(),"/_data")
+setwd(data_dir)
+
+# Load proprioceptive accuracy data
+data <- read.csv(paste0("SMPVR_proprioception_assessment"))
+## Crucial variables:
+# ID - number of participant
+# task_type - type of movement (flextion/abduction)
+# target_class - one of three target positions (60/90/120 - as a factor)
+# target - the exact target position as saved by participants (in degrees)
+# performed - the exact reproduced position (in degrees)
+
+# Check the completeness of observations for each ID and conditions
+ID_list <- unique(data$ID)
+for (i in ID_list) {
+  print(paste("ID:", i, length(data$target[data$ID==i]), "abduction:", length(data$target[data$ID==i & data$Task_type== "abduction"]), "flexion:", length(data$target[data$ID==i & data$Task_type== "flexion"]), "target_60:", length(data$target_class[data$ID==i & data$target_class== "60"]),"target_90:", length(data$target_class[data$ID==i & data$target_class== "90"]), "target_120:", length(data$target_class[data$ID==i & data$target_class== "120"])))
+} #unequeal number of target positions in abduction (6 x 90deg & and 4 x 120deg) for ID06 
+
+data$Task_type <- as.factor(data$Task_type)
+data$target_class <- as.factor(data$target_class)
+
+```
+
+<a name="S2"></a>
+&nbsp;
+
+#####**2. Calculate main variables**
+
+```{r}
+
+# Calculate reproduction error (RE: the difference between the target position and reproduced one)
+  data$diff <- data$target - data$performed
+  #RE in absolute values
+  data$diff_abs <- abs(data$target - data$performed)
+
+# Create a data frame with performance of each participant accounting for different movements (abductions & flexions) and target positions (60, 90, and 120 degrees)
+data_ID <- data %>%
+  group_by(ID) %>%
+  summarize(diff_M = mean(diff), 
+            diff_M_abs = mean(diff_abs),
+            diff_SD = sd(diff),
+            diff_M_abs_Ab = mean(diff_abs[Task_type == "abduction"]),
+            diff_M_abs_Fl = mean(diff_abs[Task_type == "flexion"]),
+            diff_SD_Ab = sd(diff[Task_type == "abduction"]),
+            diff_SD_Fl = sd(diff[Task_type == "flexion"]),
+            diff_M_abs_60 = mean(diff_abs[target_class == "60"]),
+            diff_M_abs_90 = mean(diff_abs[target_class == "90"]),
+            diff_M_abs_120 = mean(diff_abs[target_class == "120"])) 
+    
+# Standardize the mean reproduction errors to see outliers
+data_ID$diff_Z <- (data_ID$diff_M_abs - mean(data_ID$diff_M_abs))/sd(data_ID$diff_M_abs)
+
+# look for outliers (according to a cut-off criterion of three standard deviations below or above sample mean)
+data_ID$ID[data_ID$diff_Z > 3 | data_ID$diff_Z < -3]
+
+```
+
+<a name="S3"></a>
+&nbsp;
+
+#####**3. Test the correlation between prioprioceptive accuracy and proprioceptive precision**
+
+
+```{r}
+
+# Show descriptive statistics for proprioceptive accuracy (mean absolute reproduction error)
+  mean(data_ID$diff_M_abs)
+  sd(data_ID$diff_M_abs)
+  range(data_ID$diff_M_abs)
+# Show descriptive statistics for proprioceptive precision (variance of reproduction errors)
+  mean(data_ID$diff_SD)
+  sd(data_ID$diff_SD)
+  range(data_ID$diff_SD)
+
+# test normality of main prioprioceptive variables
+shapiro.test(data_ID$diff_M_abs)
+shapiro.test(data_ID$diff_SD)
+
+# test correlation
+cor.test(data_ID$diff_M_abs, data_ID$diff_SD, method = "spearman")
+
+# Plot relation between proprioceptive accuracy and precison (supplementary Figure S1)
+bold.text <- element_text(face = "bold", color = "black")
+
+Figure1 <- ggplot(data = data_ID, aes(x = diff_SD, y = diff_M_abs)) + 
+  geom_smooth(col = "grey8", method = "lm", level=0.95, alpha = 0.5) + 
+  geom_point(col = "grey 15", alpha = 0.6, size = 5, shape = 18) + 
+  labs(y = "Mean propriceptive error", x = "Variance of proprioceptive errors") +   
+  scale_fill_manual() + 
+  theme_classic() + 
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 19), axis.text=element_text(size=19),  axis.title=element_text(size=20), axis.title.y = element_text(margin = margin(t = 0, r = 7, b = 0, l = 0), hjust= 0.35), axis.title.x =   element_text(margin = margin(t = 10, r = 0, b = 0, l = 0), hjust= 0.3)) + 
+  scale_y_continuous(limits= c(1.5, 11.5), breaks = c(2,3,4,5,6,7,8,9,10), expand = c(0.01,0.01)) + 
+  scale_x_continuous(limits= c(1.5, 11.5), breaks = c(2,3,4,5,6,7,8,9,10), expand = c(0.01,0.01)) +
+  theme(axis.title = bold.text)
+
+Figure1  # export size: 6 x 6 cm
+
+
+```
+
+<a name="S4"></a>
+&nbsp;
+
+
+#####**4. Test the correlation between performance in abductions and flexions**
+
+
+```{r}
+
+# test normality of errors for abductions and flexions
+shapiro.test(data_ID$diff_M_abs_Ab)
+shapiro.test(data_ID$diff_M_abs_Fl)
+
+# correlation between reproduction errors in abductions and flexions
+cor.test(data_ID$diff_M_abs_Ab, data_ID$diff_M_abs_Fl)
+
+Figure2 <- ggplot(data = data_ID, aes(x = diff_M_abs_Ab, y = data_ID$diff_M_abs_Fl)) + 
+  geom_smooth(col = "grey8", method = "lm", level=0.95, alpha = 0.5) + 
+  geom_point(col = "grey 15", alpha = 0.6, size = 5, shape = 18) + 
+  labs(y = "Flexions (mean error)", x = "Abductions (mean error)") +   
+  scale_fill_manual() + 
+  theme_classic() + 
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 19), axis.text=element_text(size=19),  axis.title=element_text(size=20), axis.title.y = element_text(margin = margin(t = 0, r = 7, b = 0, l = 0), hjust= 0.4), axis.title.x =   element_text(margin = margin(t = 10, r = 0, b = 0, l = 0), hjust= 0.4)) + 
+  scale_y_continuous(limits= c(1.5, 11.5), breaks = c(2,3,4,5,6,7,8,9,10), expand = c(0.01,0.01)) + 
+  scale_x_continuous(limits= c(1.5, 11.5), breaks = c(2,3,4,5,6,7,8,9,10), expand = c(0.01,0.01)) +
+  theme(axis.title = bold.text)
+
+Figure2 # export size: 6 x 6 cm
+
+# test normality of the prioprioceptive variables
+shapiro.test(data_ID$diff_SD_Ab)
+shapiro.test(data_ID$diff_SD_Fl)
+
+# correlation between variance of errors in abduction and flexion trials
+cor.test(data_ID$diff_SD_Fl, data_ID$diff_SD_Ab, method = "spearman")
+
+Figure3 <- ggplot(data = data_ID, aes(x = diff_SD_Ab, y = diff_SD_Fl)) + 
+  geom_smooth(col = "grey8", method = "lm", level=0.95, alpha = 0.5) + 
+  geom_point(col = "grey 15", alpha = 0.6, size = 5, shape = 18) + 
+  labs(y = "Flexions (variance of errors)", x = "Abductions (variance of errors)") +   
+  scale_fill_manual() + 
+  theme_classic() + 
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 19), axis.text=element_text(size=19),  axis.title=element_text(size=20), axis.title.y = element_text(margin = margin(t = 0, r = 7, b = 0, l = 0), hjust= 0.35), axis.title.x =   element_text(margin = margin(t = 10, r = 0, b = 0, l = 0), hjust= 0.3)) + 
+  scale_y_continuous(limits= c(1.5, 11.5), breaks = c(2,3,4,5,6,7,8,9,10), expand = c(0.01,0.01)) + 
+  scale_x_continuous(limits= c(1.5, 11.5), breaks = c(2,3,4,5,6,7,8,9,10), expand = c(0.01,0.01)) +
+  theme(axis.title = bold.text)
+
+Figure3  # export size: 6 x 6 cm
+
+#Save the data frame as CSV file
+#write.csv(data_ID, "SMPVR_proprioception_processed_data", row.names = F)
+
+```
+

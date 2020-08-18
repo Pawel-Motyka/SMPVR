@@ -1,0 +1,218 @@
+---
+title: <font size="5">**SMPVR -- Determination of Optic Flow Speed**</font> 
+author: <br> <font size="4"> Pawe³ Motyka (University of Warsaw) </font> <br>  *pawel.motyka@psych.uw.edu.pl* 
+date: <font size="3"> June 2019  </font>
+output: html_document
+chunk_output_type: console
+
+--- 
+&nbsp;
+
+<font size="4">
+**List of sections**:
+
+1. Load the required packages and data [S1](#S1)
+2. Matched optic flow speeds for different walking directions [S2](#S2)
+3. Matched optic flow speeds for different colors of virtual environment [S3](#S3)
+4. Matched optic flow speeds for different starting speeds [S4](#S4)
+
+--- 
+
+<a name="S1"></a>
+&nbsp;
+
+#####**1. Load required packages and data** 
+```{r, message=FALSE, warning= FALSE}
+
+library(xlsx, warn.conflicts = FALSE, quietly=TRUE)
+library(dplyr, warn.conflicts = FALSE, quietly=TRUE)
+library(ggplot2, warn.conflicts = FALSE, quietly=TRUE)
+library(effsize, warn.conflicts = FALSE, quietly=TRUE)
+library(scales, warn.conflicts = FALSE, quietly=TRUE)
+library(here, warn.conflicts = FALSE, quietly=TRUE)
+
+#data directory & data reading
+data_dir <- here()
+setwd(data_dir)
+
+df <- read.xlsx(paste0(data_dir,"/_data/SMPVR_speed_assessment.xlsx"), header = TRUE, sheetIndex = 1, sep = ",")
+df <- df[, -8]
+
+## Crucial variables:
+# Direction (direction of walking: "F": forward, "B": backward)
+# Color (color of virtual environment: "G": green, "R": red)
+# Start (optic flow starting speed: "F" (fast) - 1.8 m/s, "S" (slow) - 0.1 m/s)
+# Estimate (matched optic flow speeds - true treadmill's speed equaled 0.416 m/s) 
+
+```
+
+<a name="S2"></a>
+&nbsp;
+
+#####**2. Matched optic flow speeds for different walking directions** 
+
+
+```{r, fig.width=6, fig.height=6}
+
+# individual means of matched optic flow speeds for walking forward and backward
+dfs <- df %>%
+  group_by(ID) %>%
+  dplyr::summarize(meanF = mean(Estimate[Direction == "F"]), # forward movement
+            meanB = mean(Estimate[Direction == "B"])) # backward movement
+
+# test normality of the variables
+shapiro.test(dfs$meanF)
+shapiro.test(dfs$meanB)
+
+# employ paired t-test to determine whether optic flow speeds differ between the walking backward and walking forward
+t.test(dfs$meanF, dfs$meanB, mu = 0, alt = "two.sided", conf = 0.95, paired = T)
+
+# calculate Cohen's d
+cohen.d(dfs$meanB, dfs$meanF, paired = T)
+
+# show means of matched optic flow speeds for walking forward and backward
+mean(dfs$meanF)
+sd(dfs$meanF)
+median(dfs$meanF)
+
+mean(dfs$meanB)
+sd(dfs$meanB)
+median(dfs$meanB)
+
+# show number of participants with higher matched optic flow at walking forward than walking backward
+nrow(dfs[dfs$meanB > dfs$meanF,])
+nrow(dfs[dfs$meanB < dfs$meanF,])
+
+## plot matched optic flow at walking backward and walking forward in reference to an identity line
+# save data as vectors
+meanF <- dfs$meanF
+meanB <- dfs$meanB
+
+# generate square plotting region (export size 6 x 6)
+par(pty="s")
+
+# specify plotting space
+plot(c(0,2.1),c(0,2.1),type="n",xlab ="", ylab="", cex.lab = 1, cex.axis = 1.1, frame.plot = F)
+
+title(ylab="Matched optic flow (m/s) - walking forwards", line = 2.5, cex.lab= 1.2, font.lab = 2)
+title(xlab="Matched optic flow (m/s) - walking backwards", line = 2.5, cex.lab= 1.2, font.lab = 2)
+
+# create an identity line using a customized linear model
+x<-0:2
+y<-0:2
+new <- data.frame(x = seq(0, 1.8, 0.1))
+lines(new$x, predict(lm(y~x), new),col= alpha("black", alpha = 0.5),lty= 2, lwd = 1.6)
+
+# plot the individual data
+points(meanB,meanF, pch = 19, col = alpha("royalblue4", alpha = 0.46), cex = 1.6)
+points(0.416,0.400, pch = "+", col = alpha("gray35", alpha = 1), cex = 2.8, lwd = 1.5) # values of y axis corrected to properly center "+" sign
+points(mean(dfs$meanB), mean(dfs$meanF) - 0.016, pch = "+", col = alpha("darkblue", alpha = 1), cex = 2.8, lwd = 1.5)
+
+# prepare a matrix with matched optic flow distribution (difference between matched optic flow at walking backward and walking forward)
+diff <- as.matrix(data.frame(x=density(meanB-meanF)$x,y=density(meanB-meanF)$y))
+
+# rescale y axis to match size of the plot
+f <- scales::rescale(diff[,2], to = c(0, 0.5))
+diff <- as.matrix(data.frame(x=density(meanB-meanF)$x,y=f))
+
+# prepare rotation parameters
+rotation_matrix <- matrix(c(cospi(1/4),sinpi(1/4),-sinpi(1/4),cospi(1/4)),ncol=2)
+
+# rotate the matrix with matched optic flow distribution 
+diff_rotated <- diff %*% rotation_matrix
+
+# plot optic flow distribution
+lines((diff_rotated/1.3)+1.5, col = alpha("darkblue", alpha = 0.8), lwd = 2)
+lines(c(1.1,1.85),c(1.85,1.1), col = "grey20", cex = 1)
+
+# add legend
+#legend("topleft", "Distribution of estimates" , lty=1, col = alpha("darkblue", alpha = 0.8), lwd = 2, bty='n', cex=.95)
+
+# define the coordinates representing the values plotted the x axis
+points_coordinates <- matrix(c(1,0,-1,0),nrow=2,byrow=T)
+
+# rotate the coordinates
+points_coordinates_rotated <- points_coordinates %*% rotation_matrix
+
+# add units to x axis
+text(points_coordinates_rotated[1,1]+0.57,points_coordinates_rotated[1,2]+2.28,"+0.3",srt=315,cex=.8, col = "gray20")
+text(points_coordinates_rotated[1,1]+0.62,points_coordinates_rotated[1,2]+2.34,"|",srt=315,cex=.7, col = "gray20")
+text(points_coordinates_rotated[2,1]+2.28,points_coordinates_rotated[2,2]+0.57,"-0.3",srt=315,cex=.8, col = "gray20")
+text(points_coordinates_rotated[2,1]+2.34,points_coordinates_rotated[2,2]+0.62,"|",srt=315,cex=.7, col = "gray20")
+
+
+```
+
+<a name="S3"></a>
+&nbsp;
+
+#####**3. Matched optic flow speeds for different colors of virtual environment** 
+
+
+```{r}
+
+# individual means 
+dfs <- df %>%
+  group_by(ID) %>%
+  summarize(meanR = mean(Estimate[Color == "R"]), # red
+            meanG = mean(Estimate[Color == "G"])) # green
+
+# test normality of the variables
+shapiro.test(dfs$meanR)
+shapiro.test(dfs$meanG)
+
+# employ paired t-test to determine whether optic flow speeds differ between red and green visualisations
+t.test(dfs$meanR, dfs$meanG, mu = 0, alt = "two.sided", conf = 0.95, paired = T)
+
+# calculate Cohen's d
+cohen.d(dfs$meanG, dfs$meanR, paired = T)
+
+# show means
+mean(dfs$meanR)
+sd(dfs$meanR)
+median(dfs$meanR)
+
+mean(dfs$meanG)
+sd(dfs$meanG)
+median(dfs$meanG)
+
+```
+
+<a name="S4"></a>
+&nbsp;
+
+#####**4. Matched optic flow speeds for different starting speeds** 
+
+
+```{r}
+
+# individual means 
+dfs <- df %>%
+  group_by(ID) %>%
+  summarize(meanF = mean(Estimate[Start == "F"]), # fast 1.8 m/s
+            meanS = mean(Estimate[Start == "S"])) # "slow" 0.1 m/s
+
+# test normality of the variables
+shapiro.test(dfs$meanF)
+shapiro.test(dfs$meanS)
+
+# employ paired t-test to determine whether optic flow speeds differ between slow and fast starting speeds
+t.test(dfs$meanF, dfs$meanS, mu = 0, alt = "two.sided", conf = 0.95, paired = T)
+
+# calculate Cohen's d
+cohen.d(dfs$meanS, dfs$meanF, paired = T)
+
+# show means
+mean(dfs$meanF)
+sd(dfs$meanF)
+median(dfs$meanF)
+
+mean(dfs$meanS)
+sd(dfs$meanS)
+median(dfs$meanS)
+
+
+```
+
+
+
