@@ -18,7 +18,7 @@ Action/perception, locomotion, optic flow, perceptual awareness, binocular rival
 
 #### Steps to reproduce the analysis:
 - download the entire repository as a zip-file 
-- open the relevant R code files in the downloaded folder (not directly from R studio, as the “here()” function is used for setting up the directory)
+- open the relevant R code files in the downloaded folder (not directly from R studio, as the “here” function is used for setting up the directory)
 - make sure that you have all the required packages installed
 (they are loaded in the first chunk of each code file)
 - for each code file, run the analysis chunk by chunk in sequential order.
