@@ -7,7 +7,7 @@ Paweł Motyka<sup>1</sup>, Mert Akbal<sup>2</sup><sup>,</sup><sup>3</sup>, Piotr
 <sup>2</sup>Department of Neurology, Max Planck Institute for Human Cognitive and Brain Sciences, 04103 Leipzig, Germany  <br/>
 <sup>3</sup>Academy of Fine Arts Saar, 66117 Saarbrücken, Germany <br/>
 
-Corresponding author: Paweł Motyka, e-mail: pawel.motyka{at}psych.uw.edu.pl 
+Corresponding author: Paweł Motyka, e-mail: pawel.motyka@psych.uw.edu.pl 
 <br/>
 
 #### Abstract:
