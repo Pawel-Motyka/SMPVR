@@ -1,0 +1,303 @@
+---
+title: <font size="5">**SMPVR -- Exploratory Analysis - time-course changes in perceptual awareness of optic flow patterns **</font> 
+author: <br> <font size="4"> Pawe³ Motyka (University of Warsaw) </font> <br>  *pawel.motyka@psych.uw.edu.pl* 
+date: <font size="3"> November 2019  </font>
+output: html_document
+chunk_output_type: console
+
+--- 
+
+&nbsp;
+
+<font size="4">
+**List of sections**:
+
+1. Load required packages and the raw data [S1](#S1)
+2. Calculate the proportions of percepts (responses) in consecutive one-second windows [S2](#S2)
+3. Transform the preprocessed data to be used in GAM models [S3](#S3)
+4.  Explore the non-linear associations between the time-course of blocks and the predominance of particular percepts (GAM models) [S4](#S4)
+
+<a name="S1"></a>
+&nbsp;
+
+#####**1. Load required packages and the raw data** 
+
+```{r, results = "hide", message = FALSE, warning = FALSE}
+
+library(lubridate, warn.conflicts = FALSE, quietly=TRUE)
+library(ggplot2, warn.conflicts = FALSE, quietly=TRUE)
+library(tidymv, warn.conflicts = FALSE, quietly=TRUE)
+library(colorspace, warn.conflicts = FALSE, quietly=TRUE)
+library(itsadug, warn.conflicts = FALSE, quietly=TRUE)
+library(plyr, warn.conflicts = FALSE, quietly=TRUE)
+library(readr, warn.conflicts = FALSE, quietly=TRUE)
+library(dplyr, warn.conflicts = FALSE, quietly=TRUE)
+library(mgcv, warn.conflicts = FALSE, quietly=TRUE)
+library(tidyr, warn.conflicts = FALSE, quietly=TRUE)
+library(here, warn.conflicts = FALSE, quietly=TRUE)
+
+# specify data directory
+data_dir <-  paste0(here(),"/_data")
+setwd(data_dir)
+
+# list of participants
+ID_list <- c(1:4,6:18, 20:27, 29:41)
+
+# load and preprocess the raw data
+data <- NULL
+
+for (p in ID_list) { ifelse(p < 10, ID_str <- paste('0', p, sep = ''), ID_str <- p)
+
+log <- read.csv(paste('SMPVR_',ID_str,'_log.csv', sep=''), header = TRUE, skip = 2, sep = ",")
+log$ID <- ID_str
+
+data <- rbind(data, log)
+
+}
+
+# Time variable
+#data <- back
+data <- as.data.frame(data)
+data$time <- period_to_seconds(hms(data$TimeStampLog))
+data$time <- do.call(paste, c(data[c("time")], sep = ""))
+options(digits = 8)
+data$time <- as.numeric(as.character(data$time))
+data$ID <- as.numeric(as.character(data$ID))
+
+# Test whether ID number is even or odd (different buttons used to indicate seen colors)
+is.even <- function(x) x %% 2 == 0
+data$Is_even <- is.even(data$ID)
+
+# Encode seen colors
+for ( i in unique(data$ID[data$Is_even == FALSE])) { # LOOP PARTICIPANTS (i)
+
+data$p_color[data$rightButtonLog == "1" & data$leftButtonLog == "0" & data$ID == i] <- "Red"
+data$p_color[data$rightButtonLog == "0" & data$leftButtonLog == "1" & data$ID == i] <- "Green"
+data$p_color[data$rightButtonLog == "0" & data$leftButtonLog == "0" & data$ID == i] <- "non"
+data$p_color[data$rightButtonLog == "1" & data$leftButtonLog == "1" & data$ID == i] <- "non"
+} # END: LOOP PARTICIPANTS
+
+for ( i in unique(data$ID[data$Is_even == TRUE])) { # LOOP PARTICIPANTS (i)
+
+data$p_color[data$rightButtonLog == "1" & data$leftButtonLog == "0" & data$ID == i] <- "Green"
+data$p_color[data$rightButtonLog == "0" & data$leftButtonLog == "1" & data$ID == i] <- "Red"
+data$p_color[data$rightButtonLog == "0" & data$leftButtonLog == "0" & data$ID == i] <- "non"
+data$p_color[data$rightButtonLog == "1" & data$leftButtonLog == "1" & data$ID == i] <- "non"
+}
+data <- data[data$blockLog != "Interim",]
+
+# Encode seen direction of the optic flow
+data$p_opticflow[data$forwardEyeColorLog == "Red" & data$p_color == "Red"] <- "forward"
+data$p_opticflow[data$forwardEyeColorLog == "Red" & data$p_color == "Green"] <- "backward"
+data$p_opticflow[data$forwardEyeColorLog == "Red" & data$p_color == "non"] <- "non"
+data$p_opticflow[data$forwardEyeColorLog == "Green" & data$p_color == "Green"] <- "forward"
+data$p_opticflow[data$forwardEyeColorLog == "Green" & data$p_color == "Red"] <- "backward"
+data$p_opticflow[data$forwardEyeColorLog == "Green" & data$p_color == "non"] <- "non"
+
+# rename variables
+data <- plyr::rename(data, replace = c("WalkDirectionForwardLog" = "walking"))
+data$walking <- as.character(data$walking)
+data$walking <- plyr::revalue(data$walking, c("0" = "backward", "1" = "forward"))
+
+# specify whether percepts were congruent / incongruent / or mixed
+data$congruency[data$walking == "forward" & data$p_opticflow == "forward"] <- "congruent"
+data$congruency[data$walking == "forward" & data$p_opticflow == "backward"] <- "incongruent"
+data$congruency[data$walking == "backward" & data$p_opticflow == "forward"] <- "incongruent"
+data$congruency[data$walking == "backward" & data$p_opticflow == "backward"] <- "congruent"
+data$congruency[data$p_opticflow == "non"] <- "non"
+
+##Add variable encoding the timelapse of each block
+
+# list of subjects
+sub_list <- unique(data$ID)
+dat_full <- NULL
+
+# loop over subjects
+for (s in sub_list) {
+
+block_list <- unique(data$blockLog[data$ID == s])
+
+for (b in block_list) {
+
+dt <- data[data$ID == s & data$block == b,]
+
+# derive the timelapse for each block based on timestamps
+timestamp_abs <- max(dt$time) - 120 # 120 - duration of block
+dt$timelapse <-  dt$time - timestamp_abs
+
+dat_full <- rbind(dat_full, dt)
+
+}
+}
+
+data <- dat_full
+
+```
+
+<a name="S2"></a>
+&nbsp;
+
+#####**2. Calculate the proportions of percepts (responses) in consecutive one-second windows** 
+
+```{r}
+
+# ID list
+sub_list <- unique(data$ID)
+df_sec <- NULL
+
+# loop (subjects)
+for (s in sub_list) {
+
+# list of blocks
+block_list <- unique(data$blockLog[data$ID == s])
+
+# loop (blocks)
+for (b in block_list) {
+
+# create an empty data frame
+df_sec_b <- data.frame(ID = integer(0),
+                              blockLog = integer(0),
+                              sec = numeric(0),
+                              con = numeric(0),
+                              incon = numeric(0),
+                              non = numeric(0))
+  
+df <- data[data$ID == s & data$block == b,]
+
+timelapse <- c(0:119)
+
+ID <- s
+blockLog <- b
+
+# loop (consecutive seconds of each block)
+for (t in timelapse){
+
+sec <- t + 1
+con <- length(df$ID[df$congruency == "congruent" & df$timelapse >= t & df$timelapse < t + 1])
+incon <- length(df$ID[df$congruency == "incongruent"& df$timelapse >= t & df$timelapse < t + 1])
+non <- length(df$ID[df$congruency == "non" & df$timelapse >= t & df$timelapse < t + 1])
+
+df_sec_b[nrow(df_sec_b)+1,] <- c(s,b,sec,con,incon,non)
+
+}
+df_sec <- rbind(df_sec, df_sec_b)
+}
+}
+
+# perform exclusions to match the sample used in the main analysis
+exclusion_list <- c(2,6,7,9,13,24,29,32,41) # exclusion_list
+df_sec <- df_sec[!(df_sec$ID %in% exclusion_list), ]
+length(unique(df_sec$ID))
+
+# Calculate proportions of different responses (congruent, incongruent, mixed)
+df_sec$non <- as.numeric(df_sec$non)
+df_sec$con <- as.numeric(df_sec$con)
+df_sec$incon <- as.numeric(df_sec$incon)
+df_sec$sec <- as.numeric(df_sec$sec)
+
+df_sec$c <- df_sec$con / (df_sec$non + df_sec$con + df_sec$incon)
+df_sec$inc <- df_sec$incon / (df_sec$non + df_sec$con + df_sec$incon)
+df_sec$nn <- df_sec$non / (df_sec$non + df_sec$con + df_sec$incon)
+
+#write.table(df_sec, file = "SMPVR_exploratory_data_processed", sep = "\t")
+
+```
+
+<a name="S3"></a>
+&nbsp;
+
+#####**3. Transform the preprocessed data to be used in GAM models** 
+
+```{r}
+
+# read the preprocessed data for exploratory analysis
+#df_sec <- read.table("SMPVR_exploratory_data_processed", header = TRUE, sep = "\t", fill = TRUE, stringsAsFactors = FALSE)
+
+# ploting settings
+options(width=100)
+theme_set(theme_bw())
+
+# rename variables
+df_sec$blockLog <- as.numeric(df_sec$blockLog)
+is.even <- function(x) x %% 2 == 0
+df_sec$Is_block_even <- is.even(df_sec$blockLog)
+df_sec$walking[df_sec$Is_block_even == T] <- "backward"
+df_sec$walking[df_sec$Is_block_even == F] <- "forward"
+
+# reduce data frame
+df_sec <- df_sec[,c(1,2,3,7,8,9,11)]
+df_sec$sec <- as.numeric(df_sec$sec)
+df_sec$ID <- as.numeric(df_sec$ID)
+
+# transform data to preferable format
+datt <- df_sec %>%
+  group_by(ID, sec, walking) %>%
+  dplyr:::summarize(non = mean(nn), con = mean(c), incon = mean(inc))
+
+# name factors
+congruency <- c("sec", "walking")
+perc <- "measurement"
+gathercols <- c("non", "con", "incon")
+
+# gather data
+dat <- gather(datt, congruency, perc, gathercols)
+dat$congruency <- as.factor(dat$congruency)
+dat$perc <- dat$perc * 100
+
+```
+
+<a name="S4"></a>
+&nbsp;
+
+#####**4. Explore the non-linear associations between the time-course of blocks and the predominance of particular percepts (GAM models)**
+
+```{r, warning = FALSE}
+
+### Perform analysis for walking forwards
+dat_f <- dat[dat$walking == "forward",]
+
+# fit the GAM model
+m <- gam(perc ~ congruency + s(sec, by = congruency, bs = "cr", k = 10), method = "GCV.Cp", data = dat_f) # cr: a penalized cubic regression spline  (smooth specifier) # GCV.Cp default smoothing method #k - default value 
+
+# summary of the model
+summary(m)
+
+# check the distribution of residuals and heteroscedasticity (multiple plots) 
+#gam.check(m)
+
+# plot smooths (export size: 3.7 x 7)
+plot_smooths(model = m,series = sec,comparison = congruency, ci_z = 1.96) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.text.y = element_text(face="bold",size=13, colour = "black"), axis.text.x = element_text(face="bold",size=13, colour = "black")) + scale_fill_manual(values=c(darken("#FDE725FF", amount = 0.22),  darken("dodgerblue4", amount = 0.6),"grey45")) + scale_color_manual(values=c(darken("#FDE725FF", amount = 0.22), darken("dodgerblue4", amount = 0.6) ,"grey30")) + labs(y = "Probability of percepts (%)", x = "Time-course for walking forwards (s)") + scale_x_continuous(breaks = c(0,20,40,60,80,100,120), limits = c(0, 119))
+
+# Pairwise contrasts between probabilities of different percepts (export size: 3 x 7)
+plot_diff(m, view = "sec", ylim = c(-20,20), comp=list(congruency=c("con","incon")), col = "#163b07",  col.diff = "black", cex.axis = 1.3, font = 2)
+
+plot_diff(m, view = "sec", ylim = c(-20,20), comp=list(congruency=c("con","non")), col = "#163b07",  col.diff = "black", cex.axis = 1.3, font = 2)
+
+plot_diff(m, view = "sec", ylim = c(-20,20), comp=list(congruency=c("non","incon")), col = "#163b07",  col.diff = "black", cex.axis = 1.3, font = 2)
+
+
+### Perform analysis for walking backwards
+dat_b <- dat[dat$walking == "backward",]
+
+# fit the GAM model
+m <- gam(perc ~ congruency + s(sec, by = congruency, bs = "cr", k = 10), method = "GCV.Cp", data = dat_b)  # cr: a penalized cubic regression spline  (smooth specifier) # GCV.Cp default smoothing method #k - default value 
+
+# summary of the model
+summary(m)
+
+# check the distribution of residuals and heteroscedasticity (multiple plots)
+#gam.check(m)
+
+# plot smooths
+plot_smooths(model = m,series = sec,comparison = congruency, ci_z = 1.96) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.text.y = element_text(face="bold",size=13, colour = "black"), axis.text.x = element_text(face="bold",size=13, colour = "black")) + scale_fill_manual(values=c(darken("#FDE725FF", amount = 0.22),  darken("dodgerblue4", amount = 0.6),"grey45")) + scale_color_manual(values=c(darken("#FDE725FF", amount = 0.22), darken("dodgerblue4", amount = 0.6) ,"grey30")) + labs(y = "Probability of percepts (%)", x = "Time-course for walking backwards (s)") + scale_x_continuous(breaks = c(0,20,40,60,80,100,120), limits = c(0, 119))
+
+#Pairwise contrasts between probabilities of different percepts
+plot_diff(m, view = "sec", ylim = c(-20,20), comp=list(congruency=c("incon","con")), col = "#163b07",  col.diff = "black", cex.axis = 1.3, font = 2)
+
+plot_diff(m, view = "sec", ylim = c(-20,20), comp=list(congruency=c("incon","non")), col = "#163b07",  col.diff = "black", cex.axis = 1.3, font = 2)
+
+plot_diff(m, view = "sec", ylim = c(-20,20), comp=list(congruency=c("non","con")), col = "#163b07",  col.diff = "black", cex.axis = 1.3, font = 2)
+
+```
+
+
