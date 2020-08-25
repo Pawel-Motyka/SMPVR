@@ -1,0 +1,133 @@
+---
+title: <font size="5">**SMPVR2 -- Preprocessing**</font> 
+author: <br> <font size="4"> Pawe³ Motyka (University of Warsaw) </font> <br>  *pawel.motyka@psych.uw.edu.pl* 
+date: <font size="3"> November 2019  </font>
+output: html_document
+chunk_output_type: console
+editor_options: 
+  chunk_output_type: console
+--- 
+&nbsp;
+
+<font size="4">
+**List of sections**:
+
+1. Read and preprocess the raw data [S1](#S1)
+2. Derive durations of percepts [S2](#S2)
+
+<a name="S1"></a>
+&nbsp;
+
+#####**1. Read and preprocess the raw data** 
+
+```{r, results = "hide", message = FALSE, warning = FALSE}
+
+library(dplyr)
+library(lubridate)
+library(here)
+
+data_dir <- paste0(here(),"/_data")
+setwd(data_dir)
+
+ID_list <- c(1:12)
+
+data <- NULL
+
+# read individual dataframes within the loop
+for (p in ID_list) { ifelse(p < 10, ID_str <- paste('0', p, sep = ''), ID_str <- p)  
+
+log <- read.csv(paste('SMPVR2_',ID_str,'_log.csv', sep=''), header = TRUE, skip = 2, sep = ",") 
+log$ID <- ID_str
+
+data <- rbind(data, log)
+
+}
+  
+# Encode timing in seconds
+data <- as.data.frame(data)
+data$time <- period_to_seconds(hms(data$TimeStampLog))
+data$time <- do.call(paste, c(data[c("time")], sep = ""))
+options(digits = 8)
+data$time <- as.numeric(as.character(data$time))
+data$ID <- as.numeric(as.character(data$ID))
+
+# Test whether ID number is even or odd (different buttons used to indicate seen colors)
+is.even <- function(x) x %% 2 == 0
+data$Is_even <- is.even(data$ID)
+
+## Encode perceived colors
+
+for ( i in unique(data$ID[data$Is_even == FALSE])) { # LOOP PARTICIPANTS (i)
+  
+data$p_color[data$rightButtonLog == "1" & data$leftButtonLog == "0" & data$ID == i] <- "Red"
+data$p_color[data$rightButtonLog == "0" & data$leftButtonLog == "1" & data$ID == i] <- "Green"
+data$p_color[data$rightButtonLog == "0" & data$leftButtonLog == "0" & data$ID == i] <- "non"
+data$p_color[data$rightButtonLog == "1" & data$leftButtonLog == "1" & data$ID == i] <- "non"
+} # END: LOOP PARTICIPANTS
+
+for ( i in unique(data$ID[data$Is_even == TRUE])) { # LOOP PARTICIPANTS (i)
+
+data$p_color[data$rightButtonLog == "1" & data$leftButtonLog == "0" & data$ID == i] <- "Green"
+data$p_color[data$rightButtonLog == "0" & data$leftButtonLog == "1" & data$ID == i] <- "Red"
+data$p_color[data$rightButtonLog == "0" & data$leftButtonLog == "0" & data$ID == i] <- "non"
+data$p_color[data$rightButtonLog == "1" & data$leftButtonLog == "1" & data$ID == i] <- "non"
+} # END: LOOP PARTICIPANTS
+
+# remove breaks from dataframe
+data <- data[data$blockLog != "Interim",]
+
+## Encode perceived direction of the optic flow
+data$p_opticflow[data$forwardEyeColorLog == "Red" & data$p_color == "Red"] <- "forward"
+data$p_opticflow[data$forwardEyeColorLog == "Red" & data$p_color == "Green"] <- "backward"
+data$p_opticflow[data$forwardEyeColorLog == "Red" & data$p_color == "non"] <- "non"
+data$p_opticflow[data$forwardEyeColorLog == "Green" & data$p_color == "Green"] <- "forward"
+data$p_opticflow[data$forwardEyeColorLog == "Green" & data$p_color == "Red"] <- "backward"
+data$p_opticflow[data$forwardEyeColorLog == "Green" & data$p_color == "non"] <- "non"
+
+```
+
+
+<a name="S2"></a>
+&nbsp;
+
+#####**2. Derive durations of percepts** 
+
+
+```{r}
+
+# ID list
+sub_list <- unique(data$ID)
+
+data_d =NULL
+
+# loop over the participants: 
+for (s in sub_list) { # LOOP START
+block_list <- unique(data$blockLog[data$ID == s]) # list of blocks
+
+for (i in block_list) {
+df <- data[data$ID == s & data$blockLog == i,]
+
+# for each response (button presses and mixed percepts) derive the start and end point
+df = df %>%
+  mutate(groupChanged = (p_opticflow != lag(p_opticflow, default = p_opticflow[1]))
+         , toCutBy = cumsum(groupChanged)) %>%
+  group_by(toCutBy) %>%
+slice(c(1, n()))
+
+# for each response calculate its duration
+#http://r.789695.n4.nabble.com/lagging-over-consecutive-pairs-of-rows-in-dataframe-td4729833.html
+odds <- (seq_len(nrow(df)) %% 2) == 1 
+df_durations <- data.frame(df[odds,c(1:11,13:17)], df[!odds,12] - df[odds,12]) 
+data_d=rbind(data_d,df_durations)
+
+}
+} # LOOP END
+
+# in very rare cases of super-short button presses (sigle row both as the start and endopoint) assign a plausible (non-zero) duration given the current sampling rate (i.e. 1/40 s)
+sampling_rate_per_sec <- 40
+data_d$time[data_d$time == 0] <- 1/sampling_rate_per_sec
+
+#write.table(data_d, file = "SMPVR2_data_processed", sep = "\t")
+
+```
+

@@ -1,0 +1,650 @@
+---
+title: <font size="5">**SMPVR2 - Analysis**</font> 
+author: <br> <font size="4"> Pawe³ Motyka (University of Warsaw) </font> <br>  *pawel.motyka@psych.uw.edu.pl* 
+date: <font size="3"> November 2019  </font>
+output: html_document
+chunk_output_type: console
+editor_options: 
+  chunk_output_type: console
+--- 
+
+&nbsp;
+
+<font size="4">
+**List of sections**:
+
+1. Load required packages and processed data [S1](#S1)
+2. Derive alteration rate [S2](#S2)
+3. Perform stepwise exclusions [S3](#S3)
+4. Test differences in alterations and mixed percepts between walking conditions [S4](#S4)
+5. Test differences in perceived optic flows between walking conditions [S5](#S5)
+6. Plot differences in perceived optic flows between walking conditions  [S6](#S6)
+7. Run the analysis on the sub-sample from Study 1 [S7](#S7)
+
+<a name="S1"></a>
+&nbsp;
+
+#####**1. Load required packages and processed data** 
+
+
+```{r, results = "hide", message = FALSE, warning = FALSE}
+
+require(dplyr, warn.conflicts = FALSE, quietly=TRUE)
+require(psych, warn.conflicts = FALSE, quietly=TRUE)
+require(lm.beta, warn.conflicts = FALSE, quietly=TRUE)
+require(ggplot2, warn.conflicts = FALSE, quietly=TRUE)
+require(scales, warn.conflicts = FALSE, quietly=TRUE)
+require(lme4, warn.conflicts = FALSE, quietly=TRUE)
+require(tidyr, warn.conflicts = FALSE, quietly=TRUE)
+require(afex, warn.conflicts = FALSE, quietly=TRUE)
+require(plyr, warn.conflicts = FALSE, quietly=TRUE)
+require(emmeans, warn.conflicts = FALSE, quietly=TRUE)
+require(MBESS, warn.conflicts = FALSE, quietly=TRUE)
+require(colorspace, warn.conflicts = FALSE, quietly=TRUE)
+require(DescTools, warn.conflicts = FALSE, quietly=TRUE)
+require(corrplot, warn.conflicts = FALSE, quietly=TRUE)
+require(effsize, warn.conflicts = FALSE, quietly=TRUE)
+require(DescTools, warn.conflicts = FALSE, quietly=TRUE)
+require(MatchIt, warn.conflicts = FALSE, quietly=TRUE)
+require(optmatch, warn.conflicts = FALSE, quietly=TRUE)
+require(here, warn.conflicts = FALSE, quietly=TRUE)
+require(Hmisc, warn.conflicts = FALSE, quietly=TRUE)
+
+data_dir <- paste0(here(),"/_data")
+setwd(data_dir)
+
+options(width=100)
+
+### Main data: durations of individual rensponses during binocular rivalry
+data_d <- read.table("SMPVR2_data_processed", header = TRUE, sep = "\t", fill = TRUE, stringsAsFactors = FALSE)
+# rename variables
+data_d <- plyr::rename(data_d, replace = c("WalkDirectionForwardLog" = "walking"))
+data_d$walking <- as.character(data_d$walking)
+data_d$walking <- plyr::revalue(data_d$walking, c("0" = "backward", "1" = "forward"))
+data_d <- plyr::rename(data_d, replace = c("time" = "duration"))
+## Crucial variables:
+# walking - forward/backward
+# forwardEyeLog - Left/Right (which eye is presented with forward optic flow)
+# forwardEyeLogColor - Green/Red (in which color forward optic flow is presented)
+# leftButtonLog- 1/0 (is left part of touchpad pressed)
+# rightButtonLog- 1/0 (is right part of touchpad pressed)
+# p_color - Green/Red/non (currently perceived color)
+# p_opticflow - forward/backward/non (currently perceived optic flow direction)
+# duration - duration of a given response in seconds
+
+### Questionnaire measures
+dq <-  read.table("SMPVR2_questionnaire_data", header = T,  sep = "\t", fill = TRUE, stringsAsFactors = FALSE)
+## variables:
+# demographic: age, sex, height
+# Resp_Confidence - reported confidence of button pressess during binocular rivalry (Likert scale 1-7)
+
+
+```
+
+<a name="S2"></a>
+&nbsp;
+
+#####**2. Derive alteration rate** 
+
+```{r}
+
+## derive full alterations - defined as perceptual switches from one image to another (e.g., left–none–right button presses), excluding return transitions (e.g., left–none–left).
+
+# prepare dataframe
+data_alt_blocks <- data.frame(ID = integer(0),
+                      block = integer(0),
+                      full_alterations = integer(0))
+
+# save data as separate object
+data_alt <- data_d
+
+# remove durations with no response (mixed percepts) 
+data_alt <- data_alt[data_alt$p_opticflow != "non",]
+
+# get the list of subjects
+sub_list <- unique(data_d$ID)
+for (s in sub_list) { # start loop: participants
+  
+block_list <- unique(data_alt$blockLog[data_alt$ID == s])
+for (b in block_list) {# start loop: blocks
+ 
+df <- data_alt[data_alt$ID == s & data_alt$blockLog == b,]
+
+# check for switches in sequence of consecutive responses
+df = df %>%
+  mutate(groupChanged = (p_opticflow != lag(p_opticflow, default = p_opticflow[1]))
+         , toCutBy = cumsum(groupChanged)) %>%
+  group_by(toCutBy) %>%
+slice(c(1, n()))
+
+# get number of full alterations for a given block
+full_alterations <- max(df$toCutBy)
+
+# save number of full alterations to dataframe
+data_alt_blocks[nrow(data_alt_blocks)+1,] <- c(s, b, full_alterations)  
+} # end loop: blocks
+} # end loop: participants
+
+# save as numeric variables
+data_alt_blocks$full_alterations <- as.numeric(as.character(data_alt_blocks$full_alterations))
+
+# summarize alterations per subject
+data_alt_ID <- data_alt_blocks %>%
+  group_by(ID) %>%
+  dplyr::summarize(alterations = mean(full_alterations))
+
+# Standardize mean alteration rate
+data_alt_ID$z_alterations <- (data_alt_ID$alterations - mean(data_alt_ID$alterations))/sd(data_alt_ID$alterations)
+
+# mean and SD for number of alterations per block
+mean(data_alt_ID$alterations)
+sd(data_alt_ID$alterations)
+
+# plot distribution of alterations per block
+#hist(data_alt_ID$alterations, breaks = 15, xlab = "Alerations per block", main = " ", col = "grey60", cex.lab = 1.4, cex.axis = 1.4)
+
+# save as separate dataframe
+dt <- data_alt_ID
+
+```
+
+<a name="S3"></a>
+&nbsp;
+
+#####**3. Perform stepwise exclusions ** 
+
+```{r}
+
+## (1) Criterion of minimal alteration rate 
+
+# check outliers with respect to z-values (according to a cut-off criterion of three standard deviations below or above sample mean))
+data_alt_ID$ID[data_alt_ID$z_alterations > 3 | data_alt_ID$z_alterations < -3]
+
+# Specify which subjects are to be removed due to the arbitrary criterion of at least four alterations per block (matching the one used in Study 1)
+exclusion_list_alterations <- unique(data_alt_ID$ID[data_alt_ID$alterations < 4])
+
+## (2) Criterion of minimal average duration of percepts (forward & backward taken together) 
+
+# removed no responses (mixed percepts)
+data_d_filt <- data_d[data_d$p_opticflow != "non",]
+
+# create dataframe with average duration of precepts
+dur_percepts <- data_d_filt %>%
+  group_by(ID) %>%
+  dplyr:::summarize(dur_perc = mean(duration))
+
+# standardize duration of percepts
+dur_percepts$z_dur_perc <- (dur_percepts$dur_perc - mean(dur_percepts$dur_perc))/sd(dur_percepts$dur_perc)
+
+# look for outliers (according to a cut-off criterion of three standard deviations below or above sample mean)
+dur_percepts$ID[dur_percepts$z_dur_perc > 3 | dur_percepts$z_dur_perc < -3]
+
+# Specify which subjects are to be removed due to this criterion
+exclusion_list_percept_duration <- dur_percepts$ID[dur_percepts$z_dur_perc > 3 | dur_percepts$z_dur_perc < -3]
+
+# An arbitrary cut-off criterion based on a minimal mean duration of percepts included in Study 1 (i.e., 0.86)
+length(unique(dur_percepts$ID[dur_percepts$dur_perc < 0.86]))
+additional_outliers <- unique(dur_percepts$ID[dur_percepts$dur_perc < 0.86])
+
+# Create a list of subjects to be removed due to this criteria
+exclusion_list_percept_duration  <- append(exclusion_list_percept_duration, additional_outliers)
+
+# merge with alterations dataframe
+dt <- merge(dt, dur_percepts, by = "ID")
+
+
+## (3) Criterion of minimal average duration of mixed percepts
+
+# derive mean durations of mixed percepts (in seconds)
+dur_non <- data_d %>%
+  group_by(ID, p_opticflow) %>%
+  dplyr:::summarize(dur_non = sum(duration))
+
+# keep only mixed percepts in the dataframe
+dur_non <- dur_non[dur_non$p_opticflow == "non",]
+
+# standardize duration of mixed percepts
+dur_non$z_dur_non <- (dur_non$dur_non - mean(dur_non$dur_non))/sd(dur_non$dur_non)
+
+# look for outliers (according to a cut-off criterion of three standard deviations below or above sample mean)
+dur_non$ID[dur_non$z_dur_non > 3 | dur_non$z_dur_non < -3]
+
+df_total_time <- data_d %>%
+  group_by(ID) %>%
+  dplyr:::summarize(total_time = sum(duration)) 
+# note that total time do not sum exactly to 8*120s since small time differences between consecutive button presses (rows) were not assigned to any of response durations (these gaps equal ~0.025s given 40 Hz sampling rate).
+
+# calculate mixed percepts rate in % (duration (in s)/total time (in s))
+dur_non <- merge(dur_non, df_total_time, by = c("ID"))
+dur_non$duration <- dur_non$dur_non / dur_non$total_time
+
+# Specify which subjects are to be removed due to this criterion 
+exclusion_list_mixed_percepts <- unique(dur_non$ID[dur_non$z_dur_non > 3 | dur_non$z_dur_non < -3])
+exclusion_list_mixed_percepts
+
+# An arbitrary cut-off criterion based on a maximal mixed percepts rate included in Study 1 (i.e., 0.74)
+length(unique(dur_non$ID[dur_non$duration > 0.74]))
+additional_outliers <- unique(dur_non$ID[dur_non$duration > 0.74])
+max(dur_non$duration)
+
+# merge with other behavioral dataframes
+dt <- merge(dt, dur_non, by = "ID")
+
+# save original untrimmed data (before exclusions)
+data_d_unfilt <- data_d
+
+## Perform Exclusions (main data frame)
+#(note that in case of Study 2 the exclusion lists were empty)
+
+data_d <- data_d[!(data_d$ID %in% exclusion_list_alterations), ]
+length(unique(data_d$ID))
+
+data_d <- data_d[!(data_d$ID %in% exclusion_list_percept_duration), ]
+length(unique(data_d$ID))
+
+data_d <- data_d[!(data_d$ID %in% exclusion_list_mixed_percepts), ]
+length(unique(data_d$ID))
+
+## Perform Exclusions (alterations data frame) ###
+
+length(unique(data_alt_blocks$ID))
+
+data_alt_blocks <- data_alt_blocks[!(data_alt_blocks$ID %in% exclusion_list_alterations), ]
+length(unique(data_alt_blocks$ID))
+
+data_alt_blocks <- data_alt_blocks[!(data_alt_blocks$ID %in% exclusion_list_percept_duration), ]
+length(unique(data_alt_blocks$ID))
+
+data_alt_blocks <- data_alt_blocks[!(data_alt_blocks$ID %in% exclusion_list_mixed_percepts), ]
+length(unique(data_alt_blocks$ID))
+
+
+```
+
+<a name="S4"></a>
+&nbsp;
+
+#####**4. Test differences in alterations and mixed percepts between walking conditions ** 
+
+```{r}
+
+### Alterations
+
+# recode blocks according to walking direction
+data_alt_blocks$direction[data_alt_blocks$block == 1 | data_alt_blocks$block == 3  | data_alt_blocks$block == 5  | data_alt_blocks$block == 7]  <- "forward"
+data_alt_blocks$direction[data_alt_blocks$block == 2 | data_alt_blocks$block == 4  | data_alt_blocks$block == 6  | data_alt_blocks$block == 8]  <- "backward"
+
+# summarize alteration rates per block
+data_alt_ID_direction <- data_alt_blocks %>%
+  group_by(direction, ID) %>%
+  dplyr::summarize(alterations = sum(full_alterations) / 4) # 4 blocks per walking direction
+
+# check normality of distributions 
+shapiro.test(data_alt_ID_direction$alterations[data_alt_ID_direction$direction == "forward"])
+shapiro.test(data_alt_ID_direction$alterations[data_alt_ID_direction$direction == "backward"])
+
+# test differences in alternation rates
+wilcox.test(data_alt_ID_direction$alterations[data_alt_ID_direction$direction == "forward"], data_alt_ID_direction$alterations[data_alt_ID_direction$direction == "backward"], paired = T, exact = F)
+
+# show summary statistics
+describe(data_alt_ID_direction$alterations[data_alt_ID_direction$direction == "forward"])
+describe(data_alt_ID_direction$alterations[data_alt_ID_direction$direction == "backward"])
+
+
+### Mixed Percepts
+
+# extract dataframe with mixed percepts durations per walking conditions
+d_non <- data_d %>%
+  group_by(ID, walking, p_opticflow) %>%
+  dplyr:::summarize(duration_s = sum(duration))
+d_non <- d_non[d_non$p_opticflow == "non",]
+
+# get a total duration of all response classes
+df <- data_d %>%
+  group_by(ID, walking) %>%
+  dplyr:::summarize(total_time = sum(duration)) 
+# note that total time do not sum exactly to 8*120s since small time differences between consecutive button presses (rows) were not assigned to any of response durations (these gaps equal ~0.025s given 40 Hz sampling rate).
+
+# calculate mixed percepts rate in % (duration (in s)/total time (in s))
+d_non <- merge(d_non, df, by = c("ID", "walking"))
+d_non$duration <- d_non$duration_s / d_non$total_time
+
+# check normality of distributions
+shapiro.test(d_non$duration[d_non$walking == "forward"])
+shapiro.test(d_non$duration[d_non$walking == "backward"])
+
+# test differences in mixed percepts
+t.test(d_non$duration[d_non$walking == "forward"], d_non$duration[d_non$walking == "backward"], paired = T)
+
+# show summary statistics
+mean(d_non$duration[d_non$walking == "forward"])
+sd(d_non$duration[d_non$walking == "forward"])
+mean(d_non$duration[d_non$walking == "backward"])
+sd(d_non$duration[d_non$walking == "backward"])
+
+# overall level of mixed percepts
+d_non <- data_d %>%
+  group_by(ID, p_opticflow) %>%
+  dplyr:::summarize(duration_s = sum(duration))
+d_non <- d_non[d_non$p_opticflow == "non",]
+
+# get a total duration of all response classes
+df <- data_d %>%
+  group_by(ID) %>%
+  dplyr:::summarize(total_time = sum(duration)) 
+
+# calculate mixed percepts rate in % (duration (in s)/total time (in s))
+d_non <- merge(d_non, df, by = c("ID"))
+d_non$duration <- d_non$duration_s / d_non$total_time
+
+mean(d_non$duration)
+sd(d_non$duration)
+
+```
+
+
+<a name="S5"></a>
+&nbsp;
+
+#####**5. Test differences in perceived optic flows between walking conditions ** 
+
+```{r}
+
+# recode percepts as congruent, incongruent, and mixed percepts
+data_d$congruency[data_d$walking == "forward" & data_d$p_opticflow == "forward"] <- "congruent"
+data_d$congruency[data_d$walking == "forward" & data_d$p_opticflow == "backward"] <- "incongruent"  
+data_d$congruency[data_d$walking == "backward" & data_d$p_opticflow == "forward"] <- "incongruent"
+data_d$congruency[data_d$walking == "backward" & data_d$p_opticflow == "backward"] <- "congruent"   
+data_d$congruency[data_d$p_opticflow == "non"] <- "non"
+
+# get total durations of percepts per each walking condition
+df_total_times <- data_d %>%
+  group_by(ID, walking) %>%
+  dplyr:::summarize(total_time = sum(duration))
+
+# remove mixed percepts
+data_d_percepts <- data_d[data_d$p_opticflow != "non",]
+
+# derive durations of optic flow percepts for each subject and condition
+d <- data_d_percepts %>%
+  group_by(ID, walking, congruency) %>%
+  dplyr:::summarize(duration_s = sum(duration))
+
+# merge dataframes with response durations and total times
+d <- merge(df_total_times, d, by = c("ID", "walking"))
+
+# calculate proportion of percepts in % (duration (in s)/total time (in s))
+d$duration <- (d$duration_s / d$total_time) * 100
+
+# check normality of distributions
+shapiro.test(d$duration[d$walking == "forward" & d$congruency == "congruent"])
+shapiro.test(d$duration[d$walking == "forward" & d$congruency == "incongruent"])
+shapiro.test(d$duration[d$walking == "backward" & d$congruency == "congruent"])
+shapiro.test(d$duration[d$walking == "backward" & d$congruency == "incongruent"])
+
+## test the main hypothesis with Repeated-Measures ANOVA
+main_anova <- aov_ez("ID","duration", d, within=c("congruency", "walking"), return = afex_options("return_aov"), anova_table = list())
+
+# show summary (in two output versions)
+main_anova 
+summary(main_anova)
+
+# calculate confidence intervals
+conf_intervals <- emmeans::emmeans(main_anova, specs = c("walking", "congruency"))
+conf_intervals 
+
+# post-hoc comparisons (Bonferroni method)
+emmeans::contrast(conf_intervals ,method="pairwise",adjust="bonferroni")
+
+## show means and standard deviations
+# walking forward
+mean(d$duration[d$walking == "forward" & d$congruency== "congruent"])
+sd(d$duration[d$walking == "forward" & d$congruency== "congruent"])
+mean(d$duration[d$walking == "forward" & d$congruency== "incongruent"])
+sd(d$duration[d$walking == "forward" & d$congruency== "incongruent"])
+# walking backward
+mean(d$duration[d$walking == "backward" & d$congruency== "incongruent"])
+sd(d$duration[d$walking == "backward" & d$congruency== "incongruent"])
+mean(d$duration[d$walking == "backward" & d$congruency== "congruent"])
+sd(d$duration[d$walking == "backward" & d$congruency== "congruent"])
+
+
+# participants data 
+length(dq$sex[dq$sex == "M"])
+length(dq$sex[dq$sex == "W"])
+mean(dq$age)
+sd(dq$age)
+range(dq$age)
+
+# Response confidence (self-reported degree of overlapping between button presses and dominant percepts)
+mean(dq$Resp_confidence)
+sd(dq$Resp_confidence)
+range(dq$Resp_confidence)
+
+
+```
+
+
+<a name="S6"></a>
+&nbsp;
+
+#####**6. Plot differences in perceived optic flows between walking conditions** 
+
+```{r}
+
+## Helpful resources used to create the current plots
+# https://psyteachr.github.io/msc-conv-f2f/vis.html
+# https://gist.githubusercontent.com/benmarwick/2a1bb0133ff568cbe28d/raw/fb53bd97121f7f9ce947837ef1a4c65a73bffb3f/geom_flat_violin.R
+
+# define functions used in plotting
+"%||%" <- function(a, b) {
+  if (!is.null(a)) a else b
+}
+
+geom_flat_violin <- function(mapping = NULL, data = NULL, stat = "ydensity",
+                             position = "dodge", trim = TRUE, scale = "area",
+                             show.legend = NA, inherit.aes = TRUE, ...) {
+  layer(
+    data = data,
+    mapping = mapping,
+    stat = stat,
+    geom = GeomFlatViolin,
+    position = position,
+    show.legend = show.legend,
+    inherit.aes = inherit.aes,
+    params = list(
+      trim = trim,
+      scale = scale,
+      ...
+    )
+  )
+}
+
+GeomFlatViolin <-
+  ggproto("Violinist", Geom,
+          setup_data = function(data, params) {
+            data$width <- data$width %||%
+              params$width %||% (resolution(data$x, FALSE) * 0.6) # 0.7
+            
+            # ymin, ymax, xmin, and xmax define the bounding rectangle for each group
+            data %>%
+              group_by(group) %>%
+              mutate(ymin = min(y),
+                     ymax = max(y),
+                     xmin = x,
+                     xmax = x + width / 2)
+            
+          },
+          
+          draw_group = function(data, panel_scales, coord) {
+            # Find the points for the line to go all the way around
+            data <- transform(data, xminv = x,
+                              xmaxv = x + violinwidth * (xmax - x))
+            
+            # Make sure it's sorted properly to draw the outline
+            newdata <- rbind(plyr::arrange(transform(data, x = xminv), y),
+                             plyr::arrange(transform(data, x = xmaxv), -y))
+            
+            # Close the polygon: set first and last point the same
+            # Needed for coord_polar and such
+            newdata <- rbind(newdata, newdata[1,])
+            
+            ggplot2:::ggname("geom_flat_violin", GeomPolygon$draw_panel(newdata, panel_scales, coord))
+          },
+          
+          draw_key = draw_key_polygon,
+          
+          default_aes = aes(weight = 1, colour = "grey20", fill = "white", size = 0.4, #thickness of line
+                            alpha = NA, linetype = "solid"), # solid
+          
+          required_aes = c("x", "y"))
+
+# reorder factor levels
+d$walking <- ordered(d$walking, levels = c("forward", "backward"))
+d$congruency<- ordered(d$congruency, levels = c("incongruent", "congruent"))
+
+# derive data for raincloud plots
+summary_data <-d %>%
+  group_by(walking, congruency) %>% 
+  dplyr::summarise(mean = mean(duration, na.rm = TRUE),
+            min = mean(duration) - qnorm(0.975)*sd(duration)/sqrt(n()),
+            max = mean(duration) + qnorm(0.975)*sd(duration)/sqrt(n()),
+            sd = sd(duration))
+
+# create the plot (exported size: 4 x 5.5)
+main_plot <- ggplot(d, aes(x = walking, y = duration, fill = congruency))+
+  geom_flat_violin(position = position_nudge(x = .15, y = 0), 
+                   trim=FALSE, alpha = 0.6) +
+  geom_point((aes(colour = factor(congruency))), position = position_jitter(width = .05, height = 0.05), 
+             size = 1.2, alpha = .5, show.legend = FALSE)+
+  geom_boxplot(width = .17, outlier.shape = NA, alpha = 0.6, position = "dodge", size = 0.3)+
+  geom_pointrange(
+    data = summary_data,
+    aes(walking, mean, ymin=min, ymax=max),
+    shape = 19, size = 0.5, alpha = 0.6,
+    position = position_dodge(width = 0.16),
+    show.legend = FALSE) +
+  scale_fill_manual(values=c(darken("dodgerblue4", amount = 0.7), darken("#FDE725FF", amount = 0.05))) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.line = element_line(colour = "black"), axis.text = element_text(face="bold",size=14, colour = "black"), axis.title = element_text(face="bold",size=14, colour = "black")) + scale_color_manual(values=c(darken("dodgerblue4", amount = 0.7), darken("#FDE725FF", amount = 0.15))) # 
+
+main_plot
+
+```
+
+
+<a name="S7"></a>
+&nbsp;
+
+#####**7. Run the analysis on the sub-sample from Study 1 ** 
+
+```{r}
+
+data_dir <- paste0(here(),"/_data")
+setwd(data_dir)
+
+# duration of mixed percepts (Study 2)
+dur_non2 <- dur_non
+
+# duration of mixed percepts (Study 1)
+dur_non1 <- read.table("SMPVR_data_mixed_percepts", header = T, sep = ",")
+
+# reduce and merge data frames
+dur_non1 <- dur_non1[,c(1,5)]
+dur_non1$gr <- F # F = to be sampled from
+
+dur_non2 <- dur_non2[,c(1,6)]
+dur_non2$gr <- T # T = to be matched with respect with 
+
+dur <- rbind(dur_non1, dur_non2)
+
+## match twelve subjects from study 1 with respect to distribution of mixed precepts in study 2 (https://datascienceplus.com/how-to-use-r-for-matching-samples-propensity-score/) 
+match.it <- matchit(gr ~ duration, data = dur, method="optimal")
+summary <- summary(match.it)
+
+## visual check
+#plot(match.it, type = 'jitter', interactive = FALSE)
+
+# data frame with matches
+df.match <- match.data(match.it)[1:ncol(dur)]
+
+# reduce data frame to sub-sample from Study 1
+d_matched <- df.match[df.match$gr == F,]
+
+# show mean and sd for durations of mixed percepts
+mean(d_matched$duration)
+sd(d_matched$duration)
+
+# get list of IDs from the sub-sample
+ID_matched <- d_matched$ID
+
+# read the original data from Study 1
+d <- read.table("SMPVR_processed_data_main_anova", header = T, sep = ",") 
+
+# reduce the data frame to matched sub-sample
+d <- d[(d$ID %in% ID_matched), ]
+length(unique(d$ID))
+
+# check normality of distributions
+shapiro.test(d$duration[d$walking == "forward" & d$congruency == "congruent"])
+shapiro.test(d$duration[d$walking == "forward" & d$congruency == "incongruent"])
+shapiro.test(d$duration[d$walking == "backward" & d$congruency == "congruent"])
+shapiro.test(d$duration[d$walking == "backward" & d$congruency == "incongruent"])
+
+## test the main hypothesis with Repeated-Measures ANOVA
+main_anova <- aov_ez("ID","duration", d, within=c("congruency", "walking"), return = afex_options("return_aov"), anova_table = list())
+
+# show summary (in two output versions)
+main_anova 
+summary(main_anova)
+
+# calculate confidence intervals
+conf_intervals <- emmeans::emmeans(main_anova, specs = c("walking", "congruency"))
+conf_intervals 
+
+# post-hoc comparisons (Bonferroni method)
+emmeans::contrast(conf_intervals ,method="pairwise",adjust="bonferroni")
+
+## show means and standard deviations
+# walking forward
+mean(d$duration[d$walking == "forward" & d$congruency== "congruent"])
+sd(d$duration[d$walking == "forward" & d$congruency== "congruent"])
+mean(d$duration[d$walking == "forward" & d$congruency== "incongruent"])
+sd(d$duration[d$walking == "forward" & d$congruency== "incongruent"])
+# walking backward
+mean(d$duration[d$walking == "backward" & d$congruency== "incongruent"])
+sd(d$duration[d$walking == "backward" & d$congruency== "incongruent"])
+mean(d$duration[d$walking == "backward" & d$congruency== "congruent"])
+sd(d$duration[d$walking == "backward" & d$congruency== "congruent"])
+
+## Plot the results
+# reorder factor levels
+d$walking <- ordered(d$walking, levels = c("forward", "backward"))
+d$congruency<- ordered(d$congruency, levels = c("incongruent", "congruent"))
+
+# derive data for raincloud plots
+summary_data <-d %>%
+  group_by(walking, congruency) %>% 
+  dplyr::summarise(mean = mean(duration, na.rm = TRUE),
+            min = mean(duration) - qnorm(0.975)*sd(duration)/sqrt(n()),
+            max = mean(duration) + qnorm(0.975)*sd(duration)/sqrt(n()),
+            sd = sd(duration))
+  
+# supplementary plot (exported size: 4 x 5.5)
+supplementary_plot <- ggplot(d, aes(x = walking, y = duration, fill = congruency))+
+  geom_flat_violin(position = position_nudge(x = .15, y = 0), 
+                   trim=FALSE, alpha = 0.6) +
+  geom_point((aes(colour = factor(congruency))), position = position_jitter(width = .05, height = 0.05), 
+             size = 1.2, alpha = .5, show.legend = FALSE)+
+  geom_boxplot(width = .17, outlier.shape = NA, alpha = 0.6, position = "dodge", size = 0.3)+
+  geom_pointrange(
+    data = summary_data,
+    aes(walking, mean, ymin=min, ymax=max),
+    shape = 19, size = 0.5, alpha = 0.6,
+    position = position_dodge(width = 0.16),
+    show.legend = FALSE) +
+  scale_fill_manual(values=c(darken("dodgerblue4", amount = 0.7), darken("#FDE725FF", amount = 0.05))) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.line = element_line(colour = "black"), axis.text = element_text(face="bold",size=14, colour = "black"), axis.title = element_text(face="bold",size=14, colour = "black")) + scale_color_manual(values=c(darken("dodgerblue4", amount = 0.7), darken("#FDE725FF", amount = 0.15))) # 
+
+supplementary_plot
+
+
+```
+
