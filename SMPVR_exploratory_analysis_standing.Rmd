@@ -1,0 +1,351 @@
+---
+title: <font size="5">**SMPVR - Comparison of expanding optic flow dominance while standing and walking forwards/backwards – supplementary analysis**</font> 
+author: <br> <font size="4"> Pawe³ Motyka (University of Warsaw) </font> <br>  *pawel.motyka@psych.uw.edu.pl* 
+date: <font size="3"> February 2021 </font>
+output: html_document
+chunk_output_type: console
+
+--- 
+
+&nbsp;
+
+<font size="4">
+**List of sections**:
+
+1. Load the required packages and the preprocessed data [S1](#S1)
+2. Test differences in expanding optic flow between standing and walking blocks [S2](#S2)
+3. Plot the results [S3](#S3)
+
+<a name="S1"></a>
+&nbsp;
+
+#####**1. Load the required packages and the preprocessed data** 
+
+
+```{r, results = "hide", message = FALSE, warning = FALSE}
+
+require(dplyr, warn.conflicts = FALSE, quietly=TRUE)
+require(psych, warn.conflicts = FALSE, quietly=TRUE)
+require(lm.beta, warn.conflicts = FALSE, quietly=TRUE)
+require(ggplot2, warn.conflicts = FALSE, quietly=TRUE)
+require(scales, warn.conflicts = FALSE, quietly=TRUE)
+require(lme4, warn.conflicts = FALSE, quietly=TRUE)
+require(tidyr, warn.conflicts = FALSE, quietly=TRUE)
+require(afex, warn.conflicts = FALSE, quietly=TRUE)
+require(plyr, warn.conflicts = FALSE, quietly=TRUE)
+require(emmeans, warn.conflicts = FALSE, quietly=TRUE)
+require(MBESS, warn.conflicts = FALSE, quietly=TRUE)
+require(colorspace, warn.conflicts = FALSE, quietly=TRUE)
+require(DescTools, warn.conflicts = FALSE, quietly=TRUE)
+require(corrplot, warn.conflicts = FALSE, quietly=TRUE)
+require(effsize, warn.conflicts = FALSE, quietly=TRUE)
+require(here, warn.conflicts = FALSE, quietly=TRUE)
+library(lubridate, warn.conflicts = FALSE, quietly=TRUE)
+library(BayesFactor, warn.conflicts = FALSE, quietly=TRUE)
+
+data_dir <- paste0(here(),"/_data")
+setwd(data_dir)
+
+options(width=100)
+
+# read processed data from standing (training) blocks
+st <- read.csv("SMPVR_standing_data_processed.csv", header = T,  sep = " ", fill = TRUE, stringsAsFactors = FALSE)
+
+### Main data: durations of individual rensponses during binocular rivalry
+data_d <- read.table("SMPVR_main_data_processed", header = TRUE, sep = "\t", fill = TRUE, stringsAsFactors = FALSE)
+
+# rename variables
+data_d <- plyr::rename(data_d, replace = c("WalkDirectionForwardLog" = "walking"))
+data_d$walking <- as.character(data_d$walking)
+data_d$walking <- plyr::revalue(data_d$walking, c("0" = "backward", "1" = "forward"))
+data_d <- plyr::rename(data_d, replace = c("time" = "duration"))
+
+data_d <- as.data.frame(data_d)
+data_d$time <- period_to_seconds(hms(data_d$TimeStampLog))
+data_d$time <- do.call(paste, c(data_d[c("time")], sep = ""))
+options(digits = 8)
+
+exclusion_list <- c(6, 2, 7, 9, 13, 24, 32, 41, 29) # according to the list determined in the main analysis
+length(unique(data_d$ID))
+data_d <- data_d[!(data_d$ID %in% exclusion_list), ]
+
+# list of subjects
+sub_list <- unique(data_d$ID)
+dat_full <- NULL
+
+# loop over subjects
+for (s in sub_list) {
+
+block_list <- unique(data_d$blockLog[data_d$ID == s])
+
+for (b in block_list) {
+
+dt <- data_d[data_d$ID == s & data_d$block == b,]
+
+# derive the timelapse for each block based on timestamps
+dt$time <- as.numeric(dt$time)
+timestamp_abs <- min(dt$time) # 120 - duration of block
+dt$timelapse <-  dt$time - timestamp_abs
+
+dat_full <- rbind(dat_full, dt)
+
+}
+}
+
+data_d <- dat_full
+
+
+## shorten the experimental blocks to the length of training (standing) ones
+sub_list <- unique(data_d$ID)
+dat_full <- NULL
+
+for (s in sub_list) {
+
+block_list <- unique(data_d$blockLog[data_d$ID == s])
+print(s)
+
+for (b in block_list) {
+print(b)
+dt <- data_d[data_d$ID == s & data_d$block == b,]
+
+# cut the blocks at the relevant timelapse stamp
+last <- min(dt$timelapse[dt$timelapse > 45])
+cut <- last - 45
+dt <- dt[dt$timelapse < last,]
+
+cut_dur <- dt$duration[dt$timelapse == max(dt$timelapse)]
+dt$duration[dt$duration == cut_dur] <- cut_dur - cut
+
+dat_full <- rbind(dat_full, dt)
+
+}
+}
+
+data_d <- dat_full
+
+```
+
+<a name="S2"></a>
+&nbsp;
+
+#####**2. Test differences in expanding optic flow between standing and walking blocks** 
+
+```{r, warning = FALSE}
+
+# get total durations of percepts per each walking condition
+df_total_times <- data_d %>%
+  dplyr::group_by(ID, walking, blockLog) %>%
+  dplyr::summarize(total_time = sum(duration), .groups = 'drop')
+# note that total time do not sum exactly to 45s since small time differences between consecutive button presses (rows) were not assigned to any of response durations (these gaps equal ~0.025s given 40 Hz sampling rate).
+
+# remove mixed percepts
+data_d_percepts <- data_d[data_d$p_opticflow != "non",]
+
+# derive durations of optic flow percepts for each subject and condition
+d <- data_d_percepts %>%
+  dplyr::group_by(ID, walking, blockLog, p_opticflow) %>%
+  dplyr::summarize(duration_s = sum(duration), .groups = 'drop')
+
+# merge dataframes with response durations and total times
+d <- merge(df_total_times, d, by = c("ID", "walking", "blockLog"))
+
+# calculate proportion of percepts in % (duration (in s)/total time (in s))
+d$duration <- (d$duration_s / d$total_time) * 100
+
+# separate dataframes for walking conditions
+d_f <- d[d$walking == "forward",] # walking forwards
+d_b <- d[d$walking == "backward",] # walking backwards
+
+# recode visual factors (eye, color)
+d_f$block[d_f$blockLog == 1 | d_f$blockLog == 2] <- "left_red"
+d_f$block[d_f$blockLog == 3 | d_f$blockLog == 4] <- "left_green"
+d_f$block[d_f$blockLog == 5 | d_f$blockLog == 6] <- "right_green"
+d_f$block[d_f$blockLog == 7 | d_f$blockLog == 8] <- "right_red"
+
+d_b$block[d_b$blockLog == 1 | d_b$blockLog == 2] <- "left_red"
+d_b$block[d_b$blockLog == 3 | d_b$blockLog == 4] <- "left_green"
+d_b$block[d_b$blockLog == 5 | d_b$blockLog == 6] <- "right_green"
+d_b$block[d_b$blockLog == 7 | d_b$blockLog == 8] <- "right_red"
+
+# transform dataframes
+d_f <- d_f[,c(1,5,7,8)]
+d_b <- d_b[,c(1,5,7,8)]
+
+d_ff <- pivot_wider(d_f, names_from = p_opticflow, values_from = duration)
+d_ff <- d_ff %>% replace(is.na(.), 0) # NA = no responses -> 0
+
+d_bb <- pivot_wider(d_b, names_from = p_opticflow, values_from = duration)
+d_bb <- d_bb %>% replace(is.na(.), 0)
+
+
+# change names (f - walking forwards, b - walking backwards)
+colnames(d_ff)[3] <- "backward_f"
+colnames(d_ff)[4] <- "forward_f"
+
+colnames(d_bb)[3] <- "backward_b"
+colnames(d_bb)[4] <- "forward_b"
+
+
+# transform dataframe (standing/training blocks)
+st <- st[,c(1,2,4,6)]
+
+stt <- pivot_wider(st, names_from = p_opticflow, values_from = duration)
+
+stt <- stt %>% replace(is.na(.), 0)
+
+# recode visual factors (eye, color)
+stt$block[stt$blockLog == 1 | stt$blockLog == 2] <- "left_red"
+stt$block[stt$blockLog == 3 | stt$blockLog == 4] <- "left_green"
+stt$block[stt$blockLog == 5 | stt$blockLog == 6] <- "right_green"
+stt$block[stt$blockLog == 7 | stt$blockLog == 8] <- "right_red"
+stt <- stt[,c(1,3,4,5)]
+
+# merge dataframes
+dt <- merge(stt, d_ff, by = c("ID", "block"))
+dt <- merge(dt, d_bb, by = c("ID", "block"))
+
+# summarize durations
+d <- dt %>%
+  group_by(ID) %>%
+  dplyr::summarize(forward = mean(forward), forward_f = mean(forward_f), forward_b = mean(forward_b), .groups = 'drop')
+
+# describe
+describe(d$forward) # standing
+describe(d$forward_f) # walking forwards
+describe(d$forward_b) # walking backwards
+
+## duration of expanding optic flow between standing and walking forwards
+t.test(d$forward, d$forward_f, paired = T)
+# corresponding bayes factor (robustness check)
+ttestBF(d$forward, d$forward_f, paired = T) # default prior
+ttestBF(d$forward, d$forward_f, paired = T, r = 1) # wide
+ttestBF(d$forward, d$forward_f, paired = T, r = 0.354) # narrow
+
+## duration of expanding optic flow between standing and walking forwards
+t.test(d$forward, d$forward_b, paired = T)
+# corresponding bayes factor (robustness check)
+ttestBF(d$forward, d$forward_b, paired = T) # default prior
+ttestBF(d$forward, d$forward_b, paired = T, r = 1) # wide
+ttestBF(d$forward, d$forward_b, paired = T, r = 0.354) # narrow
+
+# prepare data for plotting
+dd <- dplyr::select(d, ID, forward, forward_f, forward_b)
+
+dd <- dd %>%
+  tidyr::gather(con, forward, -ID)
+
+```
+
+<a name="S3"></a>
+&nbsp;
+
+#####**3. Plot the results** 
+
+
+```{r, warning = FALSE}
+
+## Helpful resources used to create the current plots
+# https://psyteachr.github.io/msc-conv-f2f/vis.html
+# https://gist.githubusercontent.com/benmarwick/2a1bb0133ff568cbe28d/raw/fb53bd97121f7f9ce947837ef1a4c65a73bffb3f/geom_flat_violin.R
+
+# define functions used in plotting
+"%||%" <- function(a, b) {
+  if (!is.null(a)) a else b
+}
+
+geom_flat_violin <- function(mapping = NULL, data = NULL, stat = "ydensity",
+                             position = "dodge", trim = TRUE, scale = "area",
+                             show.legend = NA, inherit.aes = TRUE, ...) {
+  layer(
+    data = data,
+    mapping = mapping,
+    stat = stat,
+    geom = GeomFlatViolin,
+    position = position,
+    show.legend = show.legend,
+    inherit.aes = inherit.aes,
+    params = list(
+      trim = trim,
+      scale = scale,
+      ...
+    )
+  )
+}
+
+GeomFlatViolin <-
+  ggproto("Violinist", Geom,
+          setup_data = function(data, params) {
+            data$width <- data$width %||%
+              params$width %||% (resolution(data$x, FALSE) * 0.6) # 0.7
+            
+            # ymin, ymax, xmin, and xmax define the bounding rectangle for each group
+            data %>%
+              group_by(group) %>%
+              mutate(ymin = min(y),
+                     ymax = max(y),
+                     xmin = x,
+                     xmax = x + width / 2)
+            
+          },
+          
+          draw_group = function(data, panel_scales, coord) {
+            # Find the points for the line to go all the way around
+            data <- transform(data, xminv = x,
+                              xmaxv = x + violinwidth * (xmax - x))
+            
+            # Make sure it's sorted properly to draw the outline
+            newdata <- rbind(plyr::arrange(transform(data, x = xminv), y),
+                             plyr::arrange(transform(data, x = xmaxv), -y))
+            
+            # Close the polygon: set first and last point the same
+            # Needed for coord_polar and such
+            newdata <- rbind(newdata, newdata[1,])
+            
+            ggplot2:::ggname("geom_flat_violin", GeomPolygon$draw_panel(newdata, panel_scales, coord))
+          },
+          
+          draw_key = draw_key_polygon,
+          
+          default_aes = aes(weight = 1, colour = "grey20", fill = "white", size = 0.4, #thickness of line
+                            alpha = NA, linetype = "solid"), # solid
+          
+          required_aes = c("x", "y"))
+
+# reorder factor levels
+#d$walking <- ordered(d$walking, levels = c("forward", "backward"))
+#d$congruency<- ordered(d$congruency, levels = c("incongruent", "congruent"))
+
+d <- dd
+colnames(d) <- c("ID", "condition", "duration")
+d$condition<- ordered(d$condition, levels = c("forward", "forward_f","forward_b"))
+
+# derive data for raincloud plots
+summary_data <-d %>%
+  group_by(condition) %>% 
+  dplyr::summarise(mean = mean(duration, na.rm = TRUE),
+            min = mean(duration) - qnorm(0.975)*sd(duration)/sqrt(n()),
+            max = mean(duration) + qnorm(0.975)*sd(duration)/sqrt(n()),
+            sd = sd(duration), .groups = 'drop')
+  
+#col <- darken("#FDE725FF", amount = 0.1)
+
+
+# create the plot (exported size: 4 x 5)
+main_plot <- ggplot(d, aes(x = condition, y = duration))+
+  geom_flat_violin(position = position_nudge(x = .15, y = 0), width = 0.7, 
+                   trim=FALSE, alpha = 0.6, fill = "gray95") +
+  geom_point(position = position_jitter(width = .05, height = 0.05), 
+             size = 1.2, alpha = .5, show.legend = FALSE, fill = "gray10")+
+  geom_boxplot(width = .14, outlier.shape = NA, alpha = 0.6, position = "dodge", size = 0.3, fill = "gray99")+
+  geom_pointrange(
+    data = summary_data,
+    aes(condition, mean, ymin=min, ymax=max),
+    shape = 19, size = 0.5, alpha = 0.6,
+    position = position_dodge(width = 0.16),
+    show.legend = FALSE) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.line = element_line(colour = "black"), axis.title = element_text(face="bold",size=14, colour = "black"), axis.text = element_text(face="bold",size=14, colour = "black")) + ylab("Expanding optic flow") + scale_x_discrete(name ="blocks", labels=c("standing","w_forwards","w_backwards"))
+main_plot
+
+
+```
+
+
